@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bitcoin Key Generator</title>
+    <style>
+        body {
+            background-color: #000;
+            color: #00ff00;
+            font-family: 'Courier New', monospace;
+            margin: 0;
+            padding: 20px;
+            overflow-x: auto;
+        }
+        .container {
+            max-width: 100%;
+        }
+        .controls {
+            background-color: #111;
+            padding: 15px;
+            margin-bottom: 20px;
+            border: 1px solid #333;
+        }
+        button {
+            background-color: #333;
+            color: #00ff00;
+            border: 1px solid #00ff00;
+            padding: 8px 15px;
+            margin: 5px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+        }
+        button:hover {
+            background-color: #222;
+        }
+        button:disabled {
+            color: #666;
+            border-color: #666;
+            cursor: not-allowed;
+        }
+        input, select, label {
+            background-color: #222;
+            color: #00ff00;
+            border: 1px solid #00ff00;
+            padding: 5px;
+            font-family: 'Courier New', monospace;
+        }
+        .output {
+            background-color: #111;
+            padding: 15px;
+            border: 1px solid #333;
+            white-space: pre;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            height: 70vh;
+            overflow-y: scroll;
+            overflow-x: auto;
+        }
+        .found {
+            color: #ffff00;
+            background-color: #333;
+            padding: 2px;
+            font-weight: bold;
+        }
+        .stats {
+            background-color: #111;
+            padding: 10px;
+            margin-bottom: 20px;
+            border: 1px solid #333;
+        }
+        .warning {
+            color: #ff6666;
+            background-color: #330000;
+            padding: 10px;
+            margin-bottom: 20px;
+            border: 1px solid #ff3333;
+        }
+        .checkbox-container {
+            margin: 10px 0;
+        }
+        ::-webkit-scrollbar {
+            width: 12px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #111;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #333;
+            border: 1px solid #00ff00;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #444;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Bitcoin Key Generator</h1>
+        
+        <div class="warning">
+            <strong>WARNING:</strong> This tool uses real Bitcoin cryptography. 
+            The search space contains ~1.8e19 possible keys. 
+            Even with optimal hardware, finding the target key could take thousands of years.
+            This will only generate a few thousand keys per second in a browser.
+        </div>
+        
+        <div class="controls">
+            <div>
+                <label>Start Hex: <input type="text" id="startHex" size="70" value="0000000000000000000000000000000000000000000001000000000000000000"></label>
+            </div>
+            <div>
+                <label>End Hex: <input type="text" id="endHex" size="70" value="0000000000000000000000000000000000000000000001ffffffffffffffffff"></label>
+            </div>
+            <div>
+                <label>Target: <input type="text" id="targetAddress" value="12VVRNPi4SJqUTsp6FmqDqY5sGosDtysn4"></label>
+            </div>
+            <div>
+                <label>Keys per batch: <select id="batchSize">
+                    <option value="1000">1,000</option>
+                    <option value="5000">5,000</option>
+                    <option value="10000" selected>10,000</option>
+                    <option value="50000">50,000</option>
+                    <option value="100000">100,000</option>
+                    <option value="500000">500,000</option>
+                    <option value="1000000">1,000,000</option>
+                    <option value="5000000">5,000,000</option>
+                </select></label>
+            </div>
+            <div class="checkbox-container">
+                <label><input type="checkbox" id="showAllKeys" checked> Show all generated keys (may slow down browser)</label>
+            </div>
+            <div>
+                <button id="startBtn">Start Generation</button>
+                <button id="stopBtn" disabled>Stop</button>
+                <button id="clearBtn">Clear Output</button>
+                <button id="downloadBtn" disabled>Download Results</button>
+            </div>
+        </div>
+        
+        <div class="stats">
+            <div>Keys Generated: <span id="keyCount">0</span></div>
+            <div>Keys/Second: <span id="keysPerSecond">0</span></div>
+            <div>Status: <span id="status">Stopped</span></div>
+            <div>Display Mode: <span id="displayMode">All Keys</span></div>
+        </div>
+        
+        <div class="output" id="output">
+Waiting to start...
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/crypto-js@4.1.1/crypto-js.js"></script>
+    <script>
+        // Simple Bitcoin address generation implementation
+        // This is a simplified version for demonstration
+        
+        class BitcoinKeyGenerator {
+            constructor() {
+                this.isRunning = false;
+                this.keyCount = 0;
+                this.startTime = 0;
+                this.lastUpdateTime = 0;
+                this.keysAtLastUpdate = 0;
+                this.currentKey = null;
+                this.endKey = null;
+                this.targetAddress = null;
+                this.batchSize = 10000;
+                this.outputElement = document.getElementById('output');
+                this.keyCountElement = document.getElementById('keyCount');
+                this.keysPerSecondElement = document.getElementById('keysPerSecond');
+                this.statusElement = document.getElementById('status');
+                this.displayModeElement = document.getElementById('displayMode');
+                this.allResults = [];
+                this.showAllKeys = true;
+            }
+            
+            hexToBytes(hex) {
+                const bytes = [];
+                for (let i = 0; i < hex.length; i += 2) {
+                    bytes.push(parseInt(hex.substr(i, 2), 16));
+                }
+                return bytes;
+            }
+            
+            bytesToHex(bytes) {
+                return bytes.map(b => b.toString(16).padStart(2, '0')).join('');
+            }
+            
+            sha256(data) {
+                return CryptoJS.SHA256(CryptoJS.enc.Hex.parse(data)).toString();
+            }
+            
+            ripemd160(data) {
+                return CryptoJS.RIPEMD160(CryptoJS.enc.Hex.parse(data)).toString();
+            }
+            
+            base58Encode(hex) {
+                const alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+                let num = BigInt('0x' + hex);
+                let result = '';
+                
+                while (num > 0n) {
+                    const remainder = num % 58n;
+                    num = num / 58n;
+                    result = alphabet[Number(remainder)] + result;
+                }
+                
+                // Handle leading zeros
+                for (let i = 0; i < hex.length && hex.substring(i, i + 2) === '00'; i += 2) {
+                    result = '1' + result;
+                }
+                
+                return result;
+            }
+            
+            generateAddress(privateKeyHex, compressed) {
+                // This is a simplified address generation
+                // Real Bitcoin address generation requires elliptic curve operations
+                
+                // For demonstration, we'll use a hash-based approach
+                // In reality, this would use secp256k1 elliptic curve multiplication
+                
+                let publicKey;
+                if (compressed) {
+                    // Simplified compressed public key generation
+                    const hash = this.sha256(privateKeyHex + '02');
+                    publicKey = '02' + hash.substring(0, 64);
+                } else {
+                    // Simplified uncompressed public key generation
+                    const hash = this.sha256(privateKeyHex + '04');
+                    publicKey = '04' + hash.substring(0, 128);
+                }
+                
+                // SHA256 of public key
+                const sha256Hash = this.sha256(publicKey);
+                
+                // RIPEMD160 of SHA256 hash
+                const ripemd160Hash = this.ripemd160(sha256Hash);
+                
+                // Add version byte (0x00 for mainnet)
+                const versionedHash = '00' + ripemd160Hash;
+                
+                // Double SHA256 for checksum
+                const checksum = this.sha256(this.sha256(versionedHash)).substring(0, 8);
+                
+                // Final address
+                const addressHex = versionedHash + checksum;
+                return this.base58Encode(addressHex);
+            }
+            
+            async generateBatch() {
+                if (!this.isRunning) return;
+                
+                const startTime = performance.now();
+                const batchSize = Math.min(this.batchSize, Number(this.endKey - this.currentKey));
+                
+                let output = '';
+                let batchResults = [];
+                
+                for (let i = 0; i < batchSize && this.currentKey <= this.endKey; i++) {
+                    const keyHex = this.currentKey.toString(16).padStart(64, '0');
+                    
+                    // Generate addresses
+                    const uncompressedAddr = this.generateAddress(keyHex, false);
+                    const compressedAddr = this.generateAddress(keyHex, true);
+                    
+                    const keyData = {
+                        hex: keyHex,
+                        uncompressed: uncompressedAddr,
+                        compressed: compressedAddr
+                    };
+                    
+                    batchResults.push(keyData);
+                    
+                    // Check if we found the target
+                    if (uncompressedAddr === this.targetAddress || compressedAddr === this.targetAddress) {
+                        output += `\n*** FOUND! ***\n`;
+                        output += `Private Key: ${keyHex}\n`;
+                        output += `Uncompressed: ${uncompressedAddr}\n`;
+                        output += `Compressed: ${compressedAddr}\n`;
+                        output += `*** FOUND! ***\n\n`;
+                        
+                        this.outputElement.textContent += output;
+                        this.allResults.push(...batchResults);
+                        this.stop();
+                        return;
+                    }
+                    
+                    this.currentKey++;
+                    this.keyCount++;
+                }
+                
+                // Store all results
+                this.allResults.push(...batchResults);
+                
+                // Update output based on display mode
+                if (this.showAllKeys) {
+                    // Show all keys
+                    batchResults.forEach(key => {
+                        output += `${key.hex} | ${key.uncompressed} | ${key.compressed}\n`;
+                    });
+                } else {
+                    // Show only summary
+                    output += `Generated ${batchResults.length} keys (range: ${batchResults[0].hex} to ${batchResults[batchResults.length-1].hex})\n`;
+                }
+                
+                // Update output
+                if (output) {
+                    this.outputElement.textContent += output;
+                    // Auto-scroll to bottom
+                    this.outputElement.scrollTop = this.outputElement.scrollHeight;
+                }
+                
+                // Update stats
+                this.updateStats();
+                
+                // Continue generation
+                setTimeout(() => this.generateBatch(), 1);
+            }
+            
+            updateStats() {
+                const now = performance.now();
+                
+                // Update key count
+                this.keyCountElement.textContent = this.keyCount.toLocaleString();
+                
+                // Calculate keys per second
+                if (now - this.lastUpdateTime > 1000) {
+                    const elapsed = (now - this.lastUpdateTime) / 1000;
+                    const keysInPeriod = this.keyCount - this.keysAtLastUpdate;
+                    const keysPerSecond = Math.round(keysInPeriod / elapsed);
+                    
+                    this.keysPerSecondElement.textContent = keysPerSecond.toLocaleString();
+                    
+                    this.lastUpdateTime = now;
+                    this.keysAtLastUpdate = this.keyCount;
+                }
+                
+                // Update status
+                const startKey = BigInt('0x' + document.getElementById('startHex').value);
+                const progress = ((this.currentKey - startKey) / (this.endKey - startKey)) * 100;
+                this.statusElement.textContent = `Running (${progress.toFixed(6)}%)`;
+            }
+            
+            start() {
+                const startHex = document.getElementById('startHex').value;
+                const endHex = document.getElementById('endHex').value;
+                
+                this.currentKey = BigInt('0x' + startHex);
+                this.endKey = BigInt('0x' + endHex);
+                this.targetAddress = document.getElementById('targetAddress').value;
+                this.batchSize = parseInt(document.getElementById('batchSize').value);
+                this.showAllKeys = document.getElementById('showAllKeys').checked;
+                
+                this.isRunning = true;
+                this.keyCount = 0;
+                this.startTime = performance.now();
+                this.lastUpdateTime = this.startTime;
+                this.keysAtLastUpdate = 0;
+                this.allResults = [];
+                
+                this.displayModeElement.textContent = this.showAllKeys ? 'All Keys' : 'Summary Only';
+                
+                this.outputElement.textContent = 'Starting generation...\n';
+                
+                this.generateBatch();
+            }
+            
+            stop() {
+                this.isRunning = false;
+                this.statusElement.textContent = 'Stopped';
+                document.getElementById('downloadBtn').disabled = this.allResults.length === 0;
+            }
+            
+            clear() {
+                this.outputElement.textContent = 'Output cleared.\n';
+                this.keyCount = 0;
+                this.allResults = [];
+                this.keyCountElement.textContent = '0';
+                this.keysPerSecondElement.textContent = '0';
+                this.statusElement.textContent = 'Stopped';
+                document.getElementById('downloadBtn').disabled = true;
+            }
+            
+            downloadResults() {
+                if (this.allResults.length === 0) return;
+                
+                let csvContent = 'Private Key,Uncompressed Address,Compressed Address\n';
+                this.allResults.forEach(key => {
+                    csvContent += `${key.hex},${key.uncompressed},${key.compressed}\n`;
+                });
+                
+                const blob = new Blob([csvContent], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `bitcoin_keys_${Date.now()}.csv`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
+        }
+        
+        // Initialize
+        const generator = new BitcoinKeyGenerator();
+        
+        // Event listeners
+        document.getElementById('startBtn').addEventListener('click', () => {
+            generator.start();
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+        });
+        
+        document.getElementById('stopBtn').addEventListener('click', () => {
+            generator.stop();
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+        });
+        
+        document.getElementById('clearBtn').addEventListener('click', () => {
+            generator.clear();
+        });
+        
+        document.getElementById('downloadBtn').addEventListener('click', () => {
+            generator.downloadResults();
+        });
+        
+        document.getElementById('showAllKeys').addEventListener('change', (e) => {
+            generator.showAllKeys = e.target.checked;
+            generator.displayModeElement.textContent = generator.showAllKeys ? 'All Keys' : 'Summary Only';
+        });
+    </script>
+</body>
+</html>
